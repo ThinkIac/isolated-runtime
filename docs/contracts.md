@@ -21,3 +21,7 @@ Testes em test/*.test.cjs exercitam a implementação original congelada em test
 ## Integração
 
 A base usa @thinkiac/module-isolated-runtime fixado por commit. As entradas antigas podem encaminhar a esse pacote. createRuntimeModule permanece apenas como alias de compatibilidade; os comentários @register do provedor continuam sendo descobertos no código compilado.
+
+## Node 24
+
+Node 24 removeu o alias --experimental-permission. A implementação migrada usa --permission nessa versão e preserva o flag antigo em Node 22. Na matriz Node 24, quatro testes do original são ignorados por essa incompatibilidade do original; os quatro testes equivalentes da implementação .type continuam obrigatórios. Em Node 22, ambas as implementações são testadas.

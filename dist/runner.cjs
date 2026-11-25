@@ -88,7 +88,7 @@ IsolatedRunner = class IsolatedRunner {
       cwd: this.options.dir,
       env: env,
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      execArgv: ['--experimental-permission', '--allow-fs-read='.concat(this.options.dir), '--allow-fs-read='.concat(node_path_1.default.dirname(childPath)), '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER))), '--allow-fs-read='.concat(compilerDir)]
+      execArgv: [(nodeMajor >= 24 ? '--permission' : '--experimental-permission'), '--allow-fs-read='.concat(this.options.dir), '--allow-fs-read='.concat(node_path_1.default.dirname(childPath)), '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER))), '--allow-fs-read='.concat(compilerDir)]
     });
     child = this.child;
     child.on('message', function(message) {

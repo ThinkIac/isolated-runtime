@@ -60,7 +60,7 @@ class IsolatedRunner
         'ipc'
       ]
       execArgv: [
-        '--experimental-permission'
+        (if nodeMajor >= 24 then '--permission' else '--experimental-permission')
         '--allow-fs-read='.concat(@options.dir)
         '--allow-fs-read='.concat(node_path_1.default.dirname(childPath))
         '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER)))
