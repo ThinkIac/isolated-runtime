@@ -1,0 +1,307 @@
+'use strict'
+# core/isolated — process boundary for packages declared `isolated: true`.
+#
+# The parent never imports package code. It receives only declarative surface
+# descriptors and invokes an opaque handler id over Node's IPC channel.
+__importDefault = this and @__importDefault or (mod) ->
+  (if mod and mod.__esModule then mod else 'default': mod)
+Object.defineProperty exports, '__esModule', value: true
+exports.IsolatedRunner = undefined
+node_child_process_1 = require('node:child_process')
+node_path_1 = __importDefault(require('node:path'))
+class IsolatedRunner
+  constructor: (options) ->
+    @child = null
+    @pending = new Map
+    @sequence = 0
+    @stopping = false
+    @manifest = null
+    @options = options
+    return
+  start: ->
+    __assign = ->
+      __assign = Object.assign or (t) ->
+        s = undefined
+        i = 1
+        n = arguments.length
+        while i < n
+          s = arguments[i]
+          for p of s
+            if Object::hasOwnProperty.call(s, p)
+              t[p] = s[p]
+          i++
+        t
+      __assign.apply this, arguments
+    _this = this
+    await undefined if false
+    if @running and @manifest
+      return @manifest
+    nodeMajor = Number(process.versions.node.split('.')[0])
+    if !Number.isInteger(nodeMajor) or nodeMajor < 20
+      throw new Error('Isolated packages require Node.js 20+ permission mode')
+    @stopping = false
+    childPath = node_path_1.default.join(__dirname, 'child.js')
+    env = __assign(__assign({}, @options.env),
+      LOGOS_TYPE_LOADER: node_path_1.default.join(node_path_1.default.dirname(require.resolve('logos')), 'kernel/type-source.js')
+      LOGOS_ISOLATED_PACKAGE: @options.dir
+      LOGOS_ISOLATED_FOLDER: @options.folder)
+    compilerDir = node_path_1.default.dirname(require.resolve('logostype/package.json', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ]))
+    env.LOGOS_TYPE_COMPILER = require.resolve('logostype', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ])
+    # Permission mode denies filesystem writes, child processes and workers by
+    # default. Reads cover the package, bootstrap and language implementation;
+    # Module._load still denies package imports outside its own root.
+    @child = node_child_process_1.fork.call(undefined, childPath, [],
+      cwd: @options.dir
+      env: env
+      stdio: [
+        'ignore'
+        'ignore'
+        'ignore'
+        'ipc'
+      ]
+      execArgv: [
+        '--experimental-permission'
+        '--allow-fs-read='.concat(@options.dir)
+        '--allow-fs-read='.concat(node_path_1.default.dirname(childPath))
+        '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER)))
+        '--allow-fs-read='.concat(compilerDir)
+      ])
+    child = @child
+    child.on 'message', (message) ->
+      if `_this.child == child`
+        _this.onMessage message
+      return
+    child.once 'exit', (code, signal) ->
+      _a = undefined
+      _b = undefined
+      expected = _this.stopping or `_this.child != child`
+      if `_this.child == child`
+        _this.onExit (if signal then 'child terminated ('.concat(signal, ')') else 'child exited')
+      (if `(_b = (_a = _this.options).onExit) == null` or `_b == void 0` then undefined else _b.call(_a,
+        code: code
+        signal: signal
+        expected: expected
+        pid: child.pid))
+      return
+    child.once 'error', (error) ->
+      if `_this.child == child`
+        _this.onExit error.message
+      return
+    try
+      manifest = await(@request('start', {}))
+      @manifest = manifest
+      return manifest
+    catch error
+      await @stop('start_failed')
+      throw error
+    return
+  invoke: (id, args, context) ->
+    if `context == void 0`
+      context = {}
+    await undefined if false
+    if !@running
+      throw new Error('Isolated package "'.concat(@options.folder, '" is not running'))
+    @request 'invoke',
+      handler: id
+      args: args
+      context: context
+  stop: (reason) ->
+    if `reason == void 0`
+      reason = 'stopped'
+    await undefined if false
+    child = @child
+    @stopping = true
+    @child = null
+    @manifest = null
+    @rejectAll reason
+    if !child or `child.exitCode != null` or `child.signalCode != null`
+      return
+    try
+      if child.connected
+        child.send
+          op: 'stop'
+          reason: reason
+    catch _a
+
+      ### already gone ###
+
+    await new Promise((resolve) ->
+      timer = setTimeout((->
+        try
+          child.kill 'SIGKILL'
+        catch _a
+
+          ### ignored ###
+
+        resolve()
+        return
+      ), 1000)
+      child.once 'exit', ->
+        clearTimeout timer
+        resolve()
+        return
+      return
+  )
+    return
+  request: (op, payload) ->
+    __assign = ->
+      __assign = Object.assign or (t) ->
+        s = undefined
+        i = 1
+        n = arguments.length
+        while i < n
+          s = arguments[i]
+          for p of s
+            if Object::hasOwnProperty.call(s, p)
+              t[p] = s[p]
+          i++
+        t
+      __assign.apply this, arguments
+    _this = this
+    child = @child
+    if !(if `child == null` or `child == void 0` then undefined else child.connected)
+      return Promise.reject(new Error('Isolated package "'.concat(@options.folder, '" is not connected')))
+    id = String(++@sequence)
+    new Promise((resolve, reject) ->
+      _a = undefined
+      timer = setTimeout((->
+        _this.pending.delete id
+        reject new Error('Isolated package "'.concat(_this.options.folder, '" ').concat(op, ' timed out'))
+        return
+      ), (if `(_a = _this.options.timeoutMs) != null` and `_a != void 0` then _a else 30000))
+      _this.pending.set id,
+        resolve: resolve
+        reject: reject
+        timer: timer
+      child.send __assign({
+        op: op
+        id: id
+      }, payload), (error) ->
+        if !error
+          return
+        pending = _this.pending.get(id)
+        if !pending
+          return
+        clearTimeout pending.timer
+        _this.pending.delete id
+        pending.reject error
+        return
+      return
+  )
+  onMessage: (message) ->
+    `var result`
+    _a = undefined
+    _b = undefined
+    _c = undefined
+    _d = undefined
+    _e = undefined
+    _f = undefined
+    _g = undefined
+    _h = undefined
+    _j = undefined
+    _k = undefined
+    _l = undefined
+    _m = undefined
+    _o = undefined
+    await undefined if false
+    if !message or `typeof message != 'object'`
+      return
+    if `message.op == 'event'`
+      try
+        result = await((if `(_b = (_a = this.options).onEvent) == null` or `_b == void 0` then undefined else _b.call(_a, message.event, message.payload)))
+        (if `(_c = this.child) == null` or `_c == void 0` then undefined else _c.send(
+          op: 'event:result'
+          id: message.id
+          result: result))
+      catch error
+        (if `(_d = this.child) == null` or `_d == void 0` then `undefined` else _d.send(
+          op: 'event:error'
+          id: message.id
+          error: (if `(_e = error === null || error === void 0 ? void 0 : error.message) != null` and `_e != void 0` then _e else String(error))))
+      return
+    if `message.op == 'capability'`
+      try
+        result = await((if `(_g = (_f = this.options).onCapability) == null` or `_g == void 0` then undefined else _g.call(_f, message.request)))
+        (if `(_h = this.child) == null` or `_h == void 0` then undefined else _h.send(
+          op: 'capability:result'
+          id: message.id
+          result: result))
+      catch error
+        (if `(_j = this.child) == null` or `_j == void 0` then `undefined` else _j.send(
+          op: 'capability:error'
+          id: message.id
+          error: (if `(_k = error === null || error === void 0 ? void 0 : error.message) != null` and `_k != void 0` then _k else String(error))))
+      return
+    if `message.op == 'log'`
+      (if `(_m = (_l = this.options).onLog) == null` or `_m == void 0` then undefined else _m.call(_l, String(message.message)))
+      return
+    pending = @pending.get(String(message.id))
+    if !pending
+      return
+    clearTimeout pending.timer
+    @pending.delete String(message.id)
+    if `message.op == 'error'`
+      pending.reject new Error((if `(_o = message.error) != null` and `_o != void 0` then _o else 'isolated package failed'))
+    else
+      pending.resolve message.result
+    return
+  onExit: (reason) ->
+    @child = null
+    @manifest = null
+    @rejectAll reason
+    return
+  rejectAll: (reason) ->
+    __values = (o) ->
+      s = `typeof Symbol == 'function'` and Symbol.iterator
+      m = s and o[s]
+      i = 0
+      if m
+        return m.call(o)
+      if o and `typeof o.length == 'number'`
+        return { next: ->
+          if o and i >= o.length
+            o = undefined
+          {
+            value: o and o[i++]
+            done: !o
+          }
+     }
+      throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+      return
+    e_1 = undefined
+    _a = undefined
+    try
+      _b = __values(@pending.values())
+      _c = _b.next()
+      while !_c.done
+        pending = _c.value
+        clearTimeout pending.timer
+        pending.reject new Error('Isolated package "'.concat(@options.folder, '": ').concat(reason))
+        _c = _b.next()
+    catch e_1_1
+      e_1 = error: e_1_1
+    finally
+      try
+        if _c and !_c.done and (_a = _b.return)
+          _a.call _b
+      catch __caught
+        throw __caught
+      finally
+        if e_1
+          throw e_1.error
+    @pending.clear()
+    return
+
+Object.defineProperty IsolatedRunner.prototype, 'running',
+  get: ->
+    Boolean @child and @child.connected and !@stopping
+
+Object.defineProperty IsolatedRunner.prototype, 'surfaces',
+  get: ->
+    @manifest
+
+Object.defineProperty IsolatedRunner.prototype, 'pid',
+  get: ->
+    _a = undefined
+    (if `(_a = this.child) == null` or `_a == void 0` then undefined else _a.pid)
+exports.IsolatedRunner = IsolatedRunner

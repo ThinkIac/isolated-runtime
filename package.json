@@ -1,0 +1,48 @@
+{
+  "name": "@thinkiac/module-isolated-runtime",
+  "version": "0.1.0",
+  "description": "Permission-limited package processes and generic mediated IPC",
+  "main": "index.cjs",
+  "files": [
+    "*.cjs",
+    "*.js",
+    "compat",
+    "src",
+    "dist",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "runtime": {
+    "role": "module",
+    "entry": "index.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@thinkiac/module-runtime-compat": "git+https://github.com/ThinkIac/runtime-compat.git#cdc7111e66614bb1ed4a80901b3363587b3e6f0a"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ThinkIac/isolated-runtime.git"
+  },
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "logostype": "git+https://github.com/ThinkIac/LogosType.git#acdcc6032ab94219e0d4a4d25b1538fb55fa19cf"
+  },
+  "peerDependencies": {
+    "logos": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "logos": {
+      "optional": true
+    }
+  }
+}

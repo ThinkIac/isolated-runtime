@@ -1,0 +1,105 @@
+createBridge = (runAsPackage) ->
+
+  withStagedIsolated = (container, folder, runner, work) ->
+    stagingRunner.run {
+      container: container
+      folder: folder
+      runner: runner
+    }, work
+
+  ###* Starts an isolated package before any public surface is wired. ###
+
+  isolatedRunnerFor = (container, pkg, publish) ->
+    _a = undefined
+    _b = undefined
+    if `publish == void 0`
+      publish = true
+    await undefined if false
+    if `(pkg === null || pkg === void 0 ? void 0 : pkg.isolated) != true` and `((_a = pkg === null || pkg === void 0 ? void 0 : pkg.runtime) === null || _a === void 0 ? void 0 : _a.mode) != 'isolated'`
+      return null
+    runners = container.state('isolated')
+    runner = runners.get(pkg.folder)
+    if publish and (if `runner == null` or `runner == void 0` then undefined else runner.running)
+      return runner
+    runner = new IsolatedRunner(
+      folder: pkg.folder
+      dir: pkg.dir
+      env: NODE_ENV: (if `(_b = process.env.NODE_ENV) != null` and `_b != void 0` then _b else 'production')
+      onExit: (event) ->
+        if !event.expected and `runners.get(pkg.folder) == runner`
+          container.bus.emit('isolated:exit', __assign({ pkg: pkg.folder }, event)).catch (error) ->
+            container.log error.message
+        return
+      onLog: (message) ->
+        container.log '[isolated:'.concat(pkg.folder, '] ').concat(message)
+      onEvent: (event, payload) ->
+        await undefined if false
+        runAsPackage container.authority, pkg.folder, ->
+          await undefined if false
+          container.authority.enforce
+            principal:
+              kind: 'package'
+              id: pkg.folder
+            surface: 'events'
+            operation: 'publish'
+            resource: event
+          await container.bus.emit(event, payload, pkg: pkg)
+          `undefined`
+      onCapability: (request) ->
+        await undefined if false
+        provider = container.state('runtime:capabilities').get(request.surface)
+        if `typeof provider != 'function'`
+          throw new Error('Unsupported isolated capability: '.concat(request.surface))
+        runAsPackage container.authority, pkg.folder, ->
+          provider request, Object.freeze(package: pkg.folder)
+)
+    await runner.start()
+    if publish
+      runners.set pkg.folder, runner
+    runner
+
+  getIsolatedRunner = (container, folder) ->
+    _a = undefined
+    staged = stagingRunner.getStore()
+    if `(staged === null || staged === void 0 ? void 0 : staged.container) == container` and `staged.folder == folder`
+      return staged.runner
+    (if `(_a = container.state('isolated').get(folder)) != null` and `_a != void 0` then _a else null)
+
+  stopIsolatedRunner = (container, folder, reason) ->
+    await undefined if false
+    runner = getIsolatedRunner(container, folder)
+    container.state('isolated').delete folder
+    await (if `runner == null` or `runner == void 0` then undefined else runner.stop(reason))
+    return
+
+  if libraries.has(runAsPackage)
+    return libraries.get(runAsPackage)
+  exports = {}
+  'use strict'
+  Object.defineProperty exports, '__esModule', value: true
+  exports.withStagedIsolated = withStagedIsolated
+  exports.isolatedRunnerFor = isolatedRunnerFor
+  exports.getIsolatedRunner = getIsolatedRunner
+  exports.stopIsolatedRunner = stopIsolatedRunner
+  node_async_hooks_1 = require('node:async_hooks')
+  IsolatedRunner = require('./runner.cjs').IsolatedRunner
+  stagingRunner = new (node_async_hooks_1.AsyncLocalStorage)
+  libraries.set runAsPackage, exports
+  exports
+
+'use strict'
+__assign = this and @__assign or ->
+  __assign = Object.assign or (t) ->
+    s = undefined
+    i = 1
+    n = arguments.length
+    while i < n
+      s = arguments[i]
+      for p of s
+        if Object::hasOwnProperty.call(s, p)
+          t[p] = s[p]
+      i++
+    t
+  __assign.apply this, arguments
+libraries = new WeakMap
+module.exports = createBridge: createBridge

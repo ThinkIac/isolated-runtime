@@ -1,0 +1,549 @@
+validateTypePath = (real) ->
+  if !real.startsWith(''.concat(pkgDir).concat(path.sep))
+    throw new Error('Module escapes isolated package root: ' + real)
+  return
+
+request = (op, payload) ->
+  id = String(++sequence)
+  new Promise((resolve, reject) ->
+    pending.set id,
+      resolve: resolve
+      reject: reject
+    hostProcess.send __assign({
+      op: op
+      id: id
+    }, payload)
+    return
+)
+
+requestEvent = (event, payload) ->
+  request 'event',
+    event: event
+    payload: payload
+
+databaseProxy = (tenant) ->
+  new Proxy({}, get: (_target, entity) ->
+    if `typeof entity != 'string'`
+      return `undefined`
+    new Proxy({}, get: (_model, method) ->
+      if `typeof method != 'string'`
+        return `undefined`
+      ->
+        args = []
+        _i = 0
+        while _i < arguments.length
+          args[_i] = arguments[_i]
+          _i++
+        request 'capability', request:
+          surface: 'database'
+          tenant: tenant
+          entity: entity
+          method: method
+          args: args
+)
+)
+
+files = (dir, out) ->
+  e_1 = undefined
+  _a = undefined
+  if `out == void 0`
+    out = []
+  try
+    _b = __values(fs.readdirSync(dir, withFileTypes: true))
+    _c = _b.next()
+    while !_c.done
+      entry = _c.value
+      if [
+          'node_modules'
+          'test'
+          'tests'
+          '__tests__'
+        ].includes(entry.name) or entry.name.startsWith('.')
+        _c = _b.next()
+        continue
+      file = path.join(dir, entry.name)
+      if entry.isDirectory() and !fs.existsSync(path.join(file, 'package.json'))
+        files file, out
+      else if entry.isFile() and /\.(?:[cm]?js|type)$/.test(entry.name) and !/\.(?:test|spec)\.(?:[cm]?js|type)$/.test(entry.name)
+        out.push file
+      _c = _b.next()
+  catch e_1_1
+    e_1 = error: e_1_1
+  finally
+    try
+      if _c and !_c.done and (_a = _b.return)
+        _a.call _b
+    catch __caught
+      throw __caught
+    finally
+      if e_1
+        throw e_1.error
+  out
+
+docOf = (fn, source) ->
+  text = Function::toString.call(fn)
+  inside = text.match(/\/\*\*([\s\S]*?)\*\//)
+  if inside
+    return inside[0]
+  name = fn.name.replace(/^bound /, '')
+  escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  above = source.match(new RegExp('/\\*\\*([\\s\\S]*?)\\*/\\s*(?:async\\s+)?function\\s+'.concat(escaped, '\\b')))
+  (if above then above[0] else '')
+
+tag = (doc, name) ->
+  match = doc.match(new RegExp('@'.concat(name, '\\s+([^\\s@]+)')))
+  (if match then match[1].trim() else null)
+
+params = (doc) ->
+  e_2 = undefined
+  _a = undefined
+  _b = undefined
+  properties = {}
+  required = []
+  try
+    _c = __values(doc.matchAll(/@param\s+\{([^}]+)\}\s+([\w.]+)\s*(?:-\s*([^\n*]+))?/g))
+    _d = _c.next()
+    while !_d.done
+      match = _d.value
+      optional = match[1].endsWith('?')
+      raw = match[1].replace('?', '').replace('[]', '')
+      type = {
+        Int: 'integer'
+        Float: 'number'
+        String: 'string'
+        Boolean: 'boolean'
+        DateTime: 'string'
+        Json: 'object'
+      }[raw] or raw
+      properties[match[2]] =
+        type: (if [
+          'string'
+          'number'
+          'integer'
+          'boolean'
+          'object'
+          'array'
+        ].includes(type) then type else 'string')
+        description: (if `(_b = match[3]) == null` or `_b == void 0` then undefined else _b.trim()) or null
+      if !optional
+        required.push match[2]
+      _d = _c.next()
+  catch e_2_1
+    e_2 = error: e_2_1
+  finally
+    try
+      if _d and !_d.done and (_a = _c.return)
+        _a.call _c
+    catch __caught
+      throw __caught
+    finally
+      if e_2
+        throw e_2.error
+  {
+    type: 'object'
+    properties: properties
+    required: required
+  }
+
+descriptor = (kind, id, fn, doc) ->
+  _a = undefined
+  _b = undefined
+  value = tag(doc, (if `kind == 'tool'` then 'register_tool' else (if `kind == 'route'` then 'register_router' else 'register_hook')))
+  if !value
+    type_1 = (if `kind == 'route'` then 'router' else (if `kind == 'tool'` then 'tool' else 'hook'))
+    lines = doc.split('\n').map((line) ->
+      line.trim().replace(/^\/\*\*?\s*/, '').replace(/^\*\s?/, '').replace /\s*\*\/$/, ''
+    )
+    declaration = lines.map((line) ->
+      line.match new RegExp('^@register[ \\t]+'.concat(type_1, '(?:[ \\t]+([^\\s@]+))?(?:[ \\t]|$)'))
+    ).find(Boolean)
+    if declaration
+      value = declaration[1] or (if `(_a = lines.map(function (line) {
+  return line.match(/^@name[ \t]+([^\s@]+)/);
+}).find(Boolean)) == null` or `_a == void 0` then undefined else _a[1])
+      if !value
+        throw new Error('[logos] @register '.concat(type_1, ' requires a name'))
+      if `kind == 'route'`
+        value = value.replace(/^\/+/, '')
+  if !value
+    return null
+  item =
+    id: id
+    kind: kind
+  if `kind == 'tool'`
+    item.name = value
+    item.description = tag(doc, 'description')
+    item.parameters = params(doc)
+  if `kind == 'route'`
+    item.path = value
+    item.method = (tag(doc, 'method') or 'get').toLowerCase()
+    publicMatch = doc.match(/@public(?:[ \t]+(?!(?:@|\*\/))(\S+))?/i)
+    publicValue = (if `(_b = publicMatch === null || publicMatch === void 0 ? void 0 : publicMatch[1]) == null` or `_b == void 0` then undefined else _b.toLowerCase())
+    if publicMatch and publicValue and ![
+        'true'
+        'false'
+      ].includes(publicValue)
+      throw new Error('[logos] @public "'.concat(publicValue, '" inválido — use true, false, ou omita o valor.'))
+    item.public = Boolean(publicMatch) and `publicValue != 'false'`
+  if `kind == 'hook'`
+    item.event = value
+    item.priority = Number(tag(doc, 'priority') or 100)
+  item
+
+discover = ->
+  `var key`
+  `var handlerId`
+  e_3 = undefined
+  _a = undefined
+  e_4 = undefined
+  _b = undefined
+  e_5 = undefined
+  _c = undefined
+  e_6 = undefined
+  _d = undefined
+  e_7 = undefined
+  _e = undefined
+  _f = undefined
+  _g = undefined
+  _h = undefined
+  _j = undefined
+  _k = undefined
+  _l = undefined
+  await undefined if false
+  result =
+    tools: []
+    routes: []
+    hooks: []
+    declarations: []
+  id = 0
+  try
+    _m = __values(files(pkgDir))
+    _o = _m.next()
+    while !_o.done
+      file = _o.value
+      delete require.cache[require.resolve(file)]
+      source = fs.readFileSync(file, 'utf8')
+      compiled = (if file.endsWith('.type') then typeLoader.compileType(source, file) else null)
+      exports = (if compiled then typeLoader.loadType(file, compiled.js, validateTypePath, ((_root, entity) ->
+        new Proxy({}, get: ((_target, key) ->
+          if `typeof key != 'string'` or `key == 'then'`
+            return `undefined`
+          request 'capability', request:
+            surface: 'database'
+            tenant: hostProcess.env.LOGOS_ISOLATED_FOLDER
+            entity: entity
+            operation: 'index'
+            key: key
+        ))
+      )) else require(file))
+      try
+        _p = (->
+          e_4 = undefined
+          __values Object.entries(exports)
+        ).call(this)
+        _q = _p.next()
+        while !_q.done
+          _r = __read(_q.value, 2)
+          exportName = _r[0]
+          fn = _r[1]
+          if `typeof fn != 'function'`
+            _q = _p.next()
+            continue
+          doc = (if compiled then (if `(_g = (_f = compiled.docs[fn.name]) !== null && _f !== void 0 ? _f : compiled.docs[exportName]) != null` and `_g != void 0` then _g else '') else docOf(fn, source))
+          tags = {}
+          registrations = []
+          try
+            _s = (->
+              e_5 = undefined
+              __values doc.split('\n').map((line) ->
+                line.trim().replace(/^\/\*\*?\s*/, '').replace(/^\*\s?/, '').replace /\s*\*\/$/, ''
+              )
+            ).call(this)
+            _t = _s.next()
+            while !_t.done
+              line = _t.value
+              match = line.match(/^@([\w-]+)(?:[ \t]+(.*?))?[ \t]*$/)
+              if !match
+                _t = _s.next()
+                continue
+              _u = __read(match, 3)
+              key = _u[1]
+              _v = _u[2]
+              raw = (if `_v == void 0` then '' else _v)
+              value = raw.trim()
+              (tags[key] or (tags[key] = [])).push value
+              if `key == 'register'`
+                registration = value.match(/^([^\s]+)(?:[ \t]+(.*))?$/)
+                if registration
+                  registrations.push
+                    type: registration[1]
+                    name: (if `(_h = registration[2]) == null` or `_h == void 0` then undefined else _h.trim()) or null
+                    legacy: false
+              else if key.startsWith('register_') and key.length > 9
+                registrations.push
+                  type: key.slice(9)
+                  name: value or null
+                  legacy: true
+              _t = _s.next()
+          catch e_5_1
+            e_5 = error: e_5_1
+          finally
+            try
+              if _t and !_t.done and (_c = _s.return)
+                _c.call _s
+            catch __caught
+              throw __caught
+            finally
+              if e_5
+                throw e_5.error
+          try
+            registrations_1 = (->
+              e_6 = undefined
+              __values registrations
+            ).call(this)
+            registrations_1_1 = registrations_1.next()
+            while !registrations_1_1.done
+              declaration = registrations_1_1.value
+              handlerId = 'declaration:'.concat(++id)
+              functions.set handlerId, fn
+              result.declarations.push
+                id: handlerId
+                file: file
+                declaration: __assign(__assign({}, declaration),
+                  name: (if `(_l = (_j = declaration.name) !== null && _j !== void 0 ? _j : (_k = tags.name) === null || _k === void 0 ? void 0 : _k[0]) != null` and `_l != void 0` then _l else (if compiled then exportName else null))
+                  tags: tags)
+              registrations_1_1 = registrations_1.next()
+          catch e_6_1
+            e_6 = error: e_6_1
+          finally
+            try
+              if registrations_1_1 and !registrations_1_1.done and (_d = registrations_1.return)
+                _d.call registrations_1
+            catch __caught
+              throw __caught
+            finally
+              if e_6
+                throw e_6.error
+          try
+            _w = (->
+              e_7 = undefined
+              __values [
+                [
+                  'tool'
+                  'tools'
+                ]
+                [
+                  'route'
+                  'routes'
+                ]
+                [
+                  'hook'
+                  'hooks'
+                ]
+              ]
+            ).call(this)
+            _x = _w.next()
+            while !_x.done
+              _y = __read(_x.value, 2)
+              kind = _y[0]
+              key = _y[1]
+              handlerId = ''.concat(kind, ':').concat(++id)
+              item = descriptor(kind, handlerId, fn, (if compiled then typeLoader.resolvedParameterDocs(doc, file) else doc))
+              if item
+                functions.set handlerId, fn
+                result[key].push item
+              _x = _w.next()
+          catch e_7_1
+            e_7 = error: e_7_1
+          finally
+            try
+              if _x and !_x.done and (_e = _w.return)
+                _e.call _w
+            catch __caught
+              throw __caught
+            finally
+              if e_7
+                throw e_7.error
+          _q = _p.next()
+      catch e_4_1
+        e_4 = error: e_4_1
+      finally
+        try
+          if _q and !_q.done and (_b = _p.return)
+            _b.call _p
+        catch __caught
+          throw __caught
+        finally
+          if e_4
+            throw e_4.error
+      _o = _m.next()
+  catch e_3_1
+    e_3 = error: e_3_1
+  finally
+    try
+      if _o and !_o.done and (_a = _m.return)
+        _a.call _m
+    catch __caught
+      throw __caught
+    finally
+      if e_3
+        throw e_3.error
+  result
+
+'use strict'
+__assign = this and @__assign or ->
+  __assign = Object.assign or (t) ->
+    s = undefined
+    i = 1
+    n = arguments.length
+    while i < n
+      s = arguments[i]
+      for p of s
+        if Object::hasOwnProperty.call(s, p)
+          t[p] = s[p]
+      i++
+    t
+  __assign.apply this, arguments
+__values = this and @__values or (o) ->
+  s = `typeof Symbol == 'function'` and Symbol.iterator
+  m = s and o[s]
+  i = 0
+  if m
+    return m.call(o)
+  if o and `typeof o.length == 'number'`
+    return { next: ->
+      if o and i >= o.length
+        o = undefined
+      {
+        value: o and o[i++]
+        done: !o
+      }
+ }
+  throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+  return
+__read = this and @__read or (o, n) ->
+  m = `typeof Symbol == 'function'` and o[Symbol.iterator]
+  if !m
+    return o
+  i = m.call(o)
+  r = undefined
+  ar = []
+  e = undefined
+  try
+    while (`n == void 0` or n-- > 0) and !(r = i.next()).done
+      ar.push r.value
+  catch error
+    e = error: error
+  finally
+    try
+      if r and !r.done and (m = i['return'])
+        m.call i
+    catch __caught
+      throw __caught
+    finally
+      if e
+        throw e.error
+  ar
+__spreadArray = this and @__spreadArray or (to, from, pack) ->
+  if pack or `arguments.length == 2`
+    i = 0
+    l = from.length
+    ar = undefined
+    while i < l
+      if ar or !(i of from)
+        if !ar
+          ar = Array::slice.call(from, 0, i)
+        ar[i] = from[i]
+      i++
+  to.concat ar or Array::slice.call(from)
+_a = undefined
+# Runs from both src in tests and dist in a published runtime.
+# LógosType uses the language loader supplied by the parent before lockdown.
+# The ambient Lógos API exposed to package code is the mediated facade below.
+fs = require('node:fs')
+path = require('node:path')
+Module = require('node:module')
+pkgDir = path.resolve(process.env.LOGOS_ISOLATED_PACKAGE)
+hostProcess = process
+# Keep compiler authority inside bootstrap; package code cannot import it.
+typeLoader = (if files(pkgDir).some(((file) ->
+  file.endsWith '.type'
+)) then require(process.env.LOGOS_TYPE_LOADER) else null)
+if typeLoader
+  typeLoader.compileType '', path.join(pkgDir, 'bootstrap.type')
+functions = new Map
+pending = new Map
+sequence = 0
+hostProcess.on 'disconnect', ->
+  hostProcess.exit 1
+logosFacade = Object.freeze(
+  requestCapability: (requestPayload) ->
+    request 'capability', request: requestPayload
+  emit: requestEvent
+  dispatchEvent: requestEvent
+  $: requestEvent
+  getProxy: databaseProxy)
+originalLoad = Module._load
+
+Module._load = (request, parent, isMain) ->
+  if `request == 'logos'`
+    return logosFacade
+  # An isolated package receives capabilities through `logos`, never direct
+  # Node authority. node:net/fetch would bypass origin grants; node:fs would
+  # bypass declared file roots.
+  if Module.builtinModules.includes(request) or request.startsWith('node:')
+    throw new Error('Native module access is denied in isolated packages: '.concat(request))
+  resolved = Module._resolveFilename(request, parent, isMain)
+  real = fs.realpathSync(resolved)
+  if `real != pkgDir` and !real.startsWith(''.concat(pkgDir).concat(path.sep))
+    throw new Error('Module escapes isolated package root: '.concat(request))
+  if `path.extname(real) == '.node'`
+    throw new Error('Native addons are denied in isolated packages: '.concat(request))
+  originalLoad.call this, request, parent, isMain
+
+# The bootstrap retains hostProcess for IPC/lifecycle; package modules only
+# receive a harmless immutable environment marker and must use IPC facades.
+Object.defineProperty globalThis, 'process',
+  value: Object.freeze(env: Object.freeze(NODE_ENV: (if `(_a = hostProcess.env.NODE_ENV) != null` and `_a != void 0` then _a else 'production')))
+  configurable: false
+  enumerable: false
+  writable: false
+Object.defineProperty globalThis, 'fetch',
+  value: `undefined`
+  configurable: false
+  writable: false
+hostProcess.on 'message', (message) ->
+  await undefined if false
+  if !message or `typeof message != 'object'`
+    return
+  if `message.op == 'event:result'` or `message.op == 'event:error'` or `message.op == 'capability:result'` or `message.op == 'capability:error'`
+    pendingCall = pending.get(String(message.id))
+    if !pendingCall
+      return
+    pending.delete String(message.id)
+    (if message.op.endsWith(':error') then pendingCall.reject(new Error(message.error)) else pendingCall.resolve(message.result))
+    return
+  if `message.op == 'stop'`
+    hostProcess.disconnect()
+    hostProcess.exit 0
+    return
+  try
+    if `message.op == 'start'`
+      hostProcess.send
+        op: 'result'
+        id: message.id
+        result: await(discover())
+    else if `message.op == 'invoke'`
+      fn = functions.get(message.handler)
+      if !fn
+        throw new Error('Unknown isolated handler: '.concat(message.handler))
+      hostProcess.send
+        op: 'result'
+        id: message.id
+        result: await(fn.apply(undefined, __spreadArray(__spreadArray([], __read(message.args or []), false), [ message.context or {} ], false)))
+  catch error
+    hostProcess.send
+      op: 'error'
+      id: message.id
+      error: (if `error == null` or `error == void 0` then `undefined` else error.stack) or (if `error == null` or `error == void 0` then `undefined` else error.message) or String(error)
+  return
