@@ -226,6 +226,13 @@ discover = ->
       compiled = (if file.endsWith('.type') then typeLoader.compileType(source, file) else null)
       exports = (if compiled then typeLoader.loadType(file, compiled.js, validateTypePath, ((_root, entity) ->
         new Proxy({}, get: ((_target, key) ->
+          if key is '__logosReadPrimaryKey'
+            return (value) ->
+              request 'capability', request:
+                surface: 'scriba:primary-key'
+                operation: 'read'
+                model: entity
+                key: value
           if `typeof key != 'string'` or `key == 'then'`
             return `undefined`
           request 'capability', request:
