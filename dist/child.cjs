@@ -1,4 +1,4 @@
-var Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, logosFacade, originalLoad, params, path, pending, pkgDir, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
+var Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, invocations, logosFacade, originalLoad, params, path, pending, pkgDir, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
 
 validateTypePath = function(real) {
   if (!real.startsWith(''.concat(pkgDir).concat(path.sep))) {
@@ -703,8 +703,10 @@ Object.defineProperty(globalThis, 'fetch', {
   writable: false
 });
 
+invocations = new Map();
+
 hostProcess.on('message', async function(message) {
-  var error, fn, pendingCall;
+  var args, context, controller, error, fn, index, j, len, pendingCall, ref, ref1, result;
   if (false) {
     await void 0;
   }
@@ -718,6 +720,12 @@ hostProcess.on('message', async function(message) {
     }
     pending.delete(String(message.id));
     (message.op.endsWith(':error') ? pendingCall.reject(new Error(message.error)) : pendingCall.resolve(message.result));
+    return;
+  }
+  if (message.op === 'cancel') {
+    if ((ref = invocations.get(message.id)) != null) {
+      ref.abort();
+    }
     return;
   }
   if (message.op == 'stop') {
@@ -737,11 +745,38 @@ hostProcess.on('message', async function(message) {
       if (!fn) {
         throw new Error('Unknown isolated handler: '.concat(message.handler));
       }
-      hostProcess.send({
-        op: 'result',
-        id: message.id,
-        result: (await (fn.apply(void 0, __spreadArray(__spreadArray([], __read(message.args || []), false), [message.context || {}], false))))
-      });
+      context = message.context || {};
+      controller = void 0;
+      if (message.cancellable) {
+        controller = new AbortController();
+        invocations.set(message.id, controller);
+        context = Object.freeze(Object.assign({}, context, {
+          signal: controller.signal
+        }));
+      }
+      try {
+        args = message.args || [];
+        ref1 = message.omitted || [];
+        for (j = 0, len = ref1.length; j < len; j++) {
+          index = ref1[j];
+          args[index] = void 0;
+        }
+        result = (await fn(...args, context));
+        if (!(controller != null ? controller.signal.aborted : void 0)) {
+          hostProcess.send({
+            op: 'result',
+            id: message.id,
+            result
+          });
+        }
+      } catch (error1) {
+        error = error1;
+        if (!(controller != null ? controller.signal.aborted : void 0)) {
+          throw error;
+        }
+      } finally {
+        invocations.delete(message.id);
+      }
     }
   } catch (error1) {
     error = error1;
