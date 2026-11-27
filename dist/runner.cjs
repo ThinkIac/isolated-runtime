@@ -127,10 +127,24 @@ IsolatedRunner = class IsolatedRunner {
     }
   }
 
-  async invoke(id, args, context) {
-    if (context == void 0) {
-      context = {};
-    }
+  invokeWithContext(id, args, context, signal) {
+    var arg, index, omitted;
+    // JSON IPC would turn omitted positional arguments into null.
+    omitted = (function() {
+      var j, len, results;
+      results = [];
+      for (index = j = 0, len = args.length; j < len; index = ++j) {
+        arg = args[index];
+        if (arg === void 0) {
+          results.push(index);
+        }
+      }
+      return results;
+    })();
+    return this.invoke(id, args, context, signal, omitted);
+  }
+
+  async invoke(id, args, context, signal, omitted) {
     if (false) {
       await void 0;
     }
@@ -139,9 +153,11 @@ IsolatedRunner = class IsolatedRunner {
     }
     return this.request('invoke', {
       handler: id,
-      args: args,
-      context: context
-    });
+      args,
+      context: context != null ? context : {},
+      cancellable: signal != null,
+      omitted
+    }, signal);
   }
 
   async stop(reason) {
@@ -189,61 +205,63 @@ IsolatedRunner = class IsolatedRunner {
     });
   }
 
-  request(op, payload) {
-    var __assign, _this, child, id;
-    __assign = function() {
-      __assign = Object.assign || function(t) {
-        var i, n, p, s;
-        s = void 0;
-        i = 1;
-        n = arguments.length;
-        while (i < n) {
-          s = arguments[i];
-          for (p in s) {
-            if (Object.prototype.hasOwnProperty.call(s, p)) {
-              t[p] = s[p];
-            }
-          }
-          i++;
-        }
-        return t;
-      };
-      return __assign.apply(this, arguments);
-    };
-    _this = this;
+  request(op, payload, signal) {
+    var child, id;
     child = this.child;
-    if (!(child == null || child == void 0 ? void 0 : child.connected)) {
+    if (!(child != null ? child.connected : void 0)) {
       return Promise.reject(new Error('Isolated package "'.concat(this.options.folder, '" is not connected')));
     }
+    if (signal != null ? signal.aborted : void 0) {
+      return Promise.reject(signal.reason);
+    }
     id = String(++this.sequence);
-    return new Promise(function(resolve, reject) {
-      var _a, timer;
-      _a = void 0;
-      timer = setTimeout((function() {
-        _this.pending.delete(id);
-        reject(new Error('Isolated package "'.concat(_this.options.folder, '" ').concat(op, ' timed out')));
-      }), ((_a = _this.options.timeoutMs) != null && _a != void 0 ? _a : 30000));
-      _this.pending.set(id, {
-        resolve: resolve,
-        reject: reject,
-        timer: timer
-      });
-      child.send(__assign({
-        op: op,
-        id: id
-      }, payload), function(error) {
-        var pending;
-        if (!error) {
-          return;
+    return new Promise((resolve, reject) => {
+      var abort, cancel, cleanup, error, ref, timer;
+      cleanup = () => {
+        clearTimeout(timer);
+        if (signal != null) {
+          signal.removeEventListener('abort', cancel);
         }
-        pending = _this.pending.get(id);
-        if (!pending) {
-          return;
+        return this.pending.delete(id);
+      };
+      abort = (error) => {
+        cleanup();
+        if ((signal != null) && child.connected) {
+          try {
+            child.send({
+              op: 'cancel',
+              id
+            }, function() {});
+          } catch (error1) {
+            null;
+          }
         }
-        clearTimeout(pending.timer);
-        _this.pending.delete(id);
-        pending.reject(error);
-      });
+        return reject(error);
+      };
+      cancel = function() {
+        return abort(signal.reason);
+      };
+      timer = setTimeout((() => {
+        return abort(new Error('Isolated package "'.concat(this.options.folder, '" ').concat(op, ' timed out')));
+      }), (ref = this.options.timeoutMs) != null ? ref : 30000);
+      this.pending.set(id, {resolve, reject, cleanup});
+      if (signal != null) {
+        signal.addEventListener('abort', cancel, {
+          once: true
+        });
+      }
+      try {
+        return child.send(Object.assign({op, id}, payload), (error) => {
+          if (error && this.pending.has(id)) {
+            cleanup();
+            return reject(error);
+          }
+        });
+      } catch (error1) {
+        error = error1;
+        cleanup();
+        return reject(error);
+      }
     });
   }
 
@@ -313,8 +331,7 @@ IsolatedRunner = class IsolatedRunner {
     if (!pending) {
       return;
     }
-    clearTimeout(pending.timer);
-    this.pending.delete(String(message.id));
+    pending.cleanup();
     if (message.op == 'error') {
       pending.reject(new Error(((_o = message.error) != null && _o != void 0 ? _o : 'isolated package failed')));
     } else {
@@ -329,61 +346,11 @@ IsolatedRunner = class IsolatedRunner {
   }
 
   rejectAll(reason) {
-    var __caught, __values, _a, _b, _c, e_1, e_1_1, pending;
-    __values = function(o) {
-      var i, m, s;
-      s = typeof Symbol == 'function' && Symbol.iterator;
-      m = s && o[s];
-      i = 0;
-      if (m) {
-        return m.call(o);
-      }
-      if (o && typeof o.length == 'number') {
-        return {
-          next: function() {
-            if (o && i >= o.length) {
-              o = void 0;
-            }
-            return {
-              value: o && o[i++],
-              done: !o
-            };
-          }
-        };
-      }
-      throw new TypeError((s ? 'Object is not iterable.' : 'Symbol.iterator is not defined.'));
-    };
-    e_1 = void 0;
-    _a = void 0;
-    try {
-      _b = __values(this.pending.values());
-      _c = _b.next();
-      while (!_c.done) {
-        pending = _c.value;
-        clearTimeout(pending.timer);
-        pending.reject(new Error('Isolated package "'.concat(this.options.folder, '": ').concat(reason)));
-        _c = _b.next();
-      }
-    } catch (error1) {
-      e_1_1 = error1;
-      e_1 = {
-        error: e_1_1
-      };
-    } finally {
-      try {
-        if (_c && !_c.done && (_a = _b.return)) {
-          _a.call(_b);
-        }
-      } catch (error1) {
-        __caught = error1;
-        throw __caught;
-      } finally {
-        if (e_1) {
-          throw e_1.error;
-        }
-      }
+    var pending;
+    for (pending of this.pending.values()) {
+      pending.cleanup();
+      pending.reject(new Error('Isolated package "'.concat(this.options.folder, '": ').concat(reason)));
     }
-    this.pending.clear();
   }
 
 };

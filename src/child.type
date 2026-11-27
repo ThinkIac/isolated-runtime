@@ -519,6 +519,7 @@ Object.defineProperty globalThis, 'fetch',
   value: `undefined`
   configurable: false
   writable: false
+invocations = new Map()
 hostProcess.on 'message', (message) ->
   await undefined if false
   if !message or `typeof message != 'object'`
@@ -529,6 +530,9 @@ hostProcess.on 'message', (message) ->
       return
     pending.delete String(message.id)
     (if message.op.endsWith(':error') then pendingCall.reject(new Error(message.error)) else pendingCall.resolve(message.result))
+    return
+  if message.op is 'cancel'
+    invocations.get(message.id)?.abort()
     return
   if `message.op == 'stop'`
     hostProcess.disconnect()
@@ -544,10 +548,22 @@ hostProcess.on 'message', (message) ->
       fn = functions.get(message.handler)
       if !fn
         throw new Error('Unknown isolated handler: '.concat(message.handler))
-      hostProcess.send
-        op: 'result'
-        id: message.id
-        result: await(fn.apply(undefined, __spreadArray(__spreadArray([], __read(message.args or []), false), [ message.context or {} ], false)))
+      context = message.context or {}
+      controller = undefined
+      if message.cancellable
+        controller = new AbortController()
+        invocations.set message.id, controller
+        context = Object.freeze Object.assign({}, context, signal: controller.signal)
+      try
+        args = message.args or []
+        args[index] = undefined for index in message.omitted or []
+        result = await fn(...args, context)
+        unless controller?.signal.aborted
+          hostProcess.send {op: 'result', id: message.id, result}
+      catch error
+        throw error unless controller?.signal.aborted
+      finally
+        invocations.delete message.id
   catch error
     hostProcess.send
       op: 'error'
