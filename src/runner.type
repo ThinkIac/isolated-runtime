@@ -9,6 +9,7 @@ Object.defineProperty exports, '__esModule', value: true
 exports.IsolatedRunner = undefined
 { AsyncLocalStorage } = require('node:async_hooks')
 { randomUUID } = require('node:crypto')
+{ realpathSync } = require('node:fs')
 node_child_process_1 = require('node:child_process')
 node_path_1 = __importDefault(require('node:path'))
 class IsolatedRunner
@@ -37,25 +38,56 @@ class IsolatedRunner
       LOGOS_ISOLATED_FOLDER: @options.folder
     compilerDir = node_path_1.default.dirname(require.resolve('logostype/package.json', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ]))
     env.LOGOS_TYPE_COMPILER = require.resolve('logostype', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ])
-    # Permission mode denies filesystem writes, child processes and workers by
-    # default. Reads cover the package, bootstrap and language implementation;
-    # Module._load still denies package imports outside its own root.
+    logosDir = node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER))
+    executorDir = node_path_1.default.dirname(childPath)
+    compilerEntry = env.LOGOS_TYPE_COMPILER
+    packageDir = @options.dir
+    launcher = process.execPath
+    launchArgs = []
+    if @options.sandboxRoot?
+      unless process.platform is 'linux'
+        throw new Error('Linux is required for the OS package sandbox')
+      root = realpathSync(@options.sandboxRoot)
+      if root is '/'
+        throw new Error('The OS package sandbox requires a dedicated runtime root')
+      launcher = @options.sandboxLauncher ? '/usr/bin/bwrap'
+      unless node_path_1.default.isAbsolute(launcher)
+        throw new Error('The OS package sandbox requires an absolute launcher path')
+      launchArgs = [
+        '--unshare-user', '--disable-userns', '--unshare-pid', '--as-pid-1'
+        '--unshare-net', '--unshare-ipc', '--unshare-uts', '--die-with-parent'
+        '--new-session', '--cap-drop', 'ALL'
+        '--ro-bind', root, '/'
+        '--dev', '/dev'
+        '--ro-bind', realpathSync(packageDir), '/package'
+        '--ro-bind', realpathSync(executorDir), '/executor'
+        '--ro-bind', realpathSync(logosDir), '/logos'
+        '--ro-bind', realpathSync(compilerDir), '/compiler'
+        '--chdir', '/package'
+        '--', '/node'
+      ]
+      packageDir = '/package'
+      executorDir = '/executor'
+      logosDir = '/logos'
+      childPath = '/executor/child.js'
+      compilerEntry = node_path_1.default.join('/compiler', node_path_1.default.relative(compilerDir, compilerEntry))
+      compilerDir = '/compiler'
+      env.LOGOS_ISOLATED_PACKAGE = packageDir
+      env.LOGOS_TYPE_LOADER = '/logos/kernel/type-source.js'
+      env.LOGOS_TYPE_COMPILER = compilerEntry
+    permissionArgs = [
+      (if nodeMajor >= 24 then '--permission' else '--experimental-permission')
+      '--allow-fs-read='.concat(packageDir)
+      '--allow-fs-read='.concat(executorDir)
+      '--allow-fs-read='.concat(logosDir)
+      '--allow-fs-read='.concat(compilerDir)
+    ]
     @child = node_child_process_1.fork.call(undefined, childPath, [],
       cwd: @options.dir
       env: env
-      stdio: [
-        'ignore'
-        'ignore'
-        'ignore'
-        'ipc'
-      ]
-      execArgv: [
-        (if nodeMajor >= 24 then '--permission' else '--experimental-permission')
-        '--allow-fs-read='.concat(@options.dir)
-        '--allow-fs-read='.concat(node_path_1.default.dirname(childPath))
-        '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER)))
-        '--allow-fs-read='.concat(compilerDir)
-      ])
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc']
+      execPath: launcher
+      execArgv: launchArgs.concat(permissionArgs))
     child = @child
     child.on 'message', (message) ->
       if `_this.child == child`

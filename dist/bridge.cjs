@@ -31,6 +31,7 @@ createBridge = function(runAsPackage) {
     runner = new IsolatedRunner({
       folder: pkg.folder,
       dir: pkg.dir,
+      sandboxRoot: process.env.LOGOS_ISOLATED_SANDBOX_ROOT,
       env: {
         NODE_ENV: ((_b = process.env.NODE_ENV) != null && _b != void 0 ? _b : 'production')
       },

@@ -48,3 +48,32 @@ npm run build
 O build usa [LogosType](https://github.com/ThinkIac/LogosType) fixado por commit. A distribuição inclui JS compilado para uso sem compilador em produção. prepare recompila ao instalar pelo Git. Dependências entre módulos usam repositórios fixados, sem caminhos vizinhos.
 
 [Contratos e migração](docs/contracts.md). MIT.
+
+### Linux isolation for untrusted packages
+
+Set `LOGOS_ISOLATED_SANDBOX_ROOT` in the host service environment to an
+administrator-managed minimal root filesystem. It must contain `/node`
+(the same Node release as the host), its dynamic loader and shared libraries,
+and empty directories `/dev`, `/package`, `/executor`, `/logos`, and
+`/compiler`. Each directory must be a real directory. Install Bubblewrap at
+`/usr/bin/bwrap` and enable user namespaces on that host.
+
+The existing isolated runner mounts this root and the package, runner,
+Lógos bootstrap, and compiler read-only. Deploy only code and assets intended
+for the sandbox in these directories. The child receives a private PID, network,
+IPC and UTS namespace, minimal devices and a filtered environment. Direct
+filesystem writes, subprocesses, native modules and further user namespaces
+are denied. Use host-authorized IPC capabilities for access to files, network,
+processes and credentials. A capability provider should perform the operation
+on behalf of the package and return only the intended result.
+
+A configured sandbox that cannot launch fails package startup. The runner keeps
+the existing host-owned IPC scopes and retires the process on timeout. The PID
+namespace and parent-death handling contain the service lifecycle. Without
+this setting, the permission-limited process is intended for trusted packages.
+Same-process packages have the privileges of the host process.
+
+Adopt the Linux mode first on a staging host and verify each application's
+mediated capabilities before enabling it in production. The sandbox shares
+the host kernel and does not impose CPU or memory quotas. Use service-level
+resource limits and keep the kernel and Node patched.

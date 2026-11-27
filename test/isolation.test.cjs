@@ -152,3 +152,62 @@ test('timeout revokes concurrent invocations and retires the child', { timeout: 
   a.deepEqual(await runner.invoke(find(restarted, 'check'), []),
     ['undefined', 'undefined', 'undefined', 'test']);
 });
+
+test('Linux sandbox preserves IPC and applies process and capability restrictions', {
+  skip: !process.env.LOGOS_TEST_BWRAP,
+  timeout: 10000,
+}, async t => {
+  const { execFileSync } = require('node:child_process');
+  const { IsolatedRunner } = require('../runner.cjs');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'logos-bwrap-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const sandboxRoot = path.join(temp, 'root');
+  const pkg = path.join(temp, 'pkg');
+  for (const dir of ['dev', 'package', 'executor', 'logos', 'compiler']) {
+    fs.mkdirSync(path.join(sandboxRoot, dir), { recursive: true });
+  }
+  fs.copyFileSync(process.execPath, path.join(sandboxRoot, 'node'));
+  const libraries = execFileSync('ldd', [process.execPath], { encoding: 'utf8' });
+  for (const [file] of libraries.matchAll(/\/[^\s()]+/g)) {
+    const destination = path.join(sandboxRoot, file);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(file, destination);
+  }
+  fs.mkdirSync(pkg);
+  fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"demo"}');
+  fs.writeFileSync(path.join(pkg, 'index.js'), `
+    const { requestCapability } = require('logos');
+    exports.check = async function () {
+      /** @register_tool check */
+      const denied = [];
+      for (const name of ['node:fs', 'node:net', 'node:child_process']) {
+        try { require(name); } catch { denied.push(name); }
+      }
+      return {
+        env: Object.keys(process.env),
+        denied,
+        value: await requestCapability({ surface: 'echo', value: 21 }),
+      };
+    };
+  `);
+  const runner = new IsolatedRunner({
+    folder: 'demo',
+    dir: pkg,
+    sandboxRoot,
+    sandboxLauncher: process.env.LOGOS_TEST_BWRAP,
+    env: { TEST_CREDENTIAL: 'host-only fixture' },
+    onCapability: ({ surface, value }) => {
+      a.equal(surface, 'echo');
+      return value * 2;
+    },
+  });
+  t.after(() => runner.stop());
+  const manifest = await runner.start();
+  a.deepEqual(await runner.invoke(manifest.tools[0].id, []), {
+    env: ['NODE_ENV'],
+    denied: ['node:fs', 'node:net', 'node:child_process'],
+    value: 42,
+  });
+  await runner.stop();
+  a.equal(runner.running, false);
+});

@@ -1,5 +1,5 @@
 'use strict';
-var AsyncLocalStorage, IsolatedRunner, __importDefault, node_child_process_1, node_path_1, randomUUID;
+var AsyncLocalStorage, IsolatedRunner, __importDefault, node_child_process_1, node_path_1, randomUUID, realpathSync;
 
 // core/isolated — process boundary for packages declared `isolated: true`.
 
@@ -25,6 +25,8 @@ exports.IsolatedRunner = void 0;
 
 ({randomUUID} = require('node:crypto'));
 
+({realpathSync} = require('node:fs'));
+
 node_child_process_1 = require('node:child_process');
 
 node_path_1 = __importDefault(require('node:path'));
@@ -41,7 +43,7 @@ IsolatedRunner = class IsolatedRunner {
   }
 
   async start() {
-    var _this, child, childPath, compilerDir, env, error, manifest, nodeMajor, ref, ref1;
+    var _this, child, childPath, compilerDir, compilerEntry, env, error, executorDir, launchArgs, launcher, logosDir, manifest, nodeMajor, packageDir, permissionArgs, ref, ref1, ref2, root;
     _this = this;
     if (false) {
       await void 0;
@@ -67,14 +69,42 @@ IsolatedRunner = class IsolatedRunner {
     env.LOGOS_TYPE_COMPILER = require.resolve('logostype', {
       paths: [node_path_1.default.dirname(env.LOGOS_TYPE_LOADER)]
     });
-    // Permission mode denies filesystem writes, child processes and workers by
-    // default. Reads cover the package, bootstrap and language implementation;
-    // Module._load still denies package imports outside its own root.
+    logosDir = node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER));
+    executorDir = node_path_1.default.dirname(childPath);
+    compilerEntry = env.LOGOS_TYPE_COMPILER;
+    packageDir = this.options.dir;
+    launcher = process.execPath;
+    launchArgs = [];
+    if (this.options.sandboxRoot != null) {
+      if (process.platform !== 'linux') {
+        throw new Error('Linux is required for the OS package sandbox');
+      }
+      root = realpathSync(this.options.sandboxRoot);
+      if (root === '/') {
+        throw new Error('The OS package sandbox requires a dedicated runtime root');
+      }
+      launcher = (ref2 = this.options.sandboxLauncher) != null ? ref2 : '/usr/bin/bwrap';
+      if (!node_path_1.default.isAbsolute(launcher)) {
+        throw new Error('The OS package sandbox requires an absolute launcher path');
+      }
+      launchArgs = ['--unshare-user', '--disable-userns', '--unshare-pid', '--as-pid-1', '--unshare-net', '--unshare-ipc', '--unshare-uts', '--die-with-parent', '--new-session', '--cap-drop', 'ALL', '--ro-bind', root, '/', '--dev', '/dev', '--ro-bind', realpathSync(packageDir), '/package', '--ro-bind', realpathSync(executorDir), '/executor', '--ro-bind', realpathSync(logosDir), '/logos', '--ro-bind', realpathSync(compilerDir), '/compiler', '--chdir', '/package', '--', '/node'];
+      packageDir = '/package';
+      executorDir = '/executor';
+      logosDir = '/logos';
+      childPath = '/executor/child.js';
+      compilerEntry = node_path_1.default.join('/compiler', node_path_1.default.relative(compilerDir, compilerEntry));
+      compilerDir = '/compiler';
+      env.LOGOS_ISOLATED_PACKAGE = packageDir;
+      env.LOGOS_TYPE_LOADER = '/logos/kernel/type-source.js';
+      env.LOGOS_TYPE_COMPILER = compilerEntry;
+    }
+    permissionArgs = [(nodeMajor >= 24 ? '--permission' : '--experimental-permission'), '--allow-fs-read='.concat(packageDir), '--allow-fs-read='.concat(executorDir), '--allow-fs-read='.concat(logosDir), '--allow-fs-read='.concat(compilerDir)];
     this.child = node_child_process_1.fork.call(void 0, childPath, [], {
       cwd: this.options.dir,
       env: env,
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      execArgv: [(nodeMajor >= 24 ? '--permission' : '--experimental-permission'), '--allow-fs-read='.concat(this.options.dir), '--allow-fs-read='.concat(node_path_1.default.dirname(childPath)), '--allow-fs-read='.concat(node_path_1.default.dirname(node_path_1.default.dirname(env.LOGOS_TYPE_LOADER))), '--allow-fs-read='.concat(compilerDir)]
+      execPath: launcher,
+      execArgv: launchArgs.concat(permissionArgs)
     });
     child = this.child;
     child.on('message', function(message) {

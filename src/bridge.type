@@ -24,6 +24,7 @@ createBridge = (runAsPackage) ->
     runner = new IsolatedRunner(
       folder: pkg.folder
       dir: pkg.dir
+      sandboxRoot: process.env.LOGOS_ISOLATED_SANDBOX_ROOT
       env: NODE_ENV: (if `(_b = process.env.NODE_ENV) != null` and `_b != void 0` then _b else 'production')
       onExit: (event) ->
         if !event.expected and `runners.get(pkg.folder) == runner`
