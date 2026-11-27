@@ -15,24 +15,12 @@ class IsolatedRunner
   constructor: (options) ->
     @child = null
     @pending = new Map
+    @timedOutChildren = new WeakSet
     @stopping = false
     @manifest = null
     @options = options
     return
   start: ->
-    __assign = ->
-      __assign = Object.assign or (t) ->
-        s = undefined
-        i = 1
-        n = arguments.length
-        while i < n
-          s = arguments[i]
-          for p of s
-            if Object::hasOwnProperty.call(s, p)
-              t[p] = s[p]
-          i++
-        t
-      __assign.apply this, arguments
     _this = this
     await undefined if false
     if @running and @manifest
@@ -42,10 +30,11 @@ class IsolatedRunner
       throw new Error('Isolated packages require Node.js 20+ permission mode')
     @stopping = false
     childPath = node_path_1.default.join(__dirname, 'child.js')
-    env = __assign(__assign({}, @options.env),
+    env =
+      NODE_ENV: @options.env?.NODE_ENV ? 'production'
       LOGOS_TYPE_LOADER: node_path_1.default.join(node_path_1.default.dirname(require.resolve('logos')), 'kernel/type-source.js')
       LOGOS_ISOLATED_PACKAGE: @options.dir
-      LOGOS_ISOLATED_FOLDER: @options.folder)
+      LOGOS_ISOLATED_FOLDER: @options.folder
     compilerDir = node_path_1.default.dirname(require.resolve('logostype/package.json', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ]))
     env.LOGOS_TYPE_COMPILER = require.resolve('logostype', paths: [ node_path_1.default.dirname(env.LOGOS_TYPE_LOADER) ])
     # Permission mode denies filesystem writes, child processes and workers by
@@ -75,7 +64,7 @@ class IsolatedRunner
     child.once 'exit', (code, signal) ->
       _a = undefined
       _b = undefined
-      expected = _this.stopping or `_this.child != child`
+      expected = !_this.timedOutChildren.has(child) and (_this.stopping or _this.child isnt child)
       if `_this.child == child`
         _this.onExit (if signal then 'child terminated ('.concat(signal, ')') else 'child exited')
       (if `(_b = (_a = _this.options).onExit) == null` or `_b == void 0` then undefined else _b.call(_a,
@@ -163,7 +152,13 @@ class IsolatedRunner
           catch then null
         reject error
       cancel = -> abort signal.reason
-      timer = setTimeout (=> abort new Error('Isolated package "'.concat(@options.folder, '" ').concat(op, ' timed out'))), @options.timeoutMs ? 30000
+      timer = setTimeout (=>
+        reason = op + ' timed out'
+        # Stop revokes every pending host scope before settling the calls.
+        @timedOutChildren.add child
+        @stop reason
+        return
+      ), @options.timeoutMs ? 30000
       @pending.set id, {resolve, reject, cleanup, runInContext}
       signal?.addEventListener 'abort', cancel, {once: true}
       try

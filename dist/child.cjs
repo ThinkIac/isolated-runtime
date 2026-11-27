@@ -1,4 +1,4 @@
-var AsyncLocalStorage, Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, invocationScope, invocations, logosFacade, originalLoad, params, path, pending, pkgDir, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
+var AsyncLocalStorage, Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, invocationScope, invocations, j, len, logosFacade, name, originalLoad, params, path, pending, pkgDir, ref, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
 
 validateTypePath = function(real) {
   if (!real.startsWith(''.concat(pkgDir).concat(path.sep))) {
@@ -703,16 +703,20 @@ Object.defineProperty(globalThis, 'process', {
   writable: false
 });
 
-Object.defineProperty(globalThis, 'fetch', {
-  value: undefined,
-  configurable: false,
-  writable: false
-});
+ref = ['fetch', 'WebSocket', 'EventSource'];
+for (j = 0, len = ref.length; j < len; j++) {
+  name = ref[j];
+  Object.defineProperty(globalThis, name, {
+    value: void 0,
+    configurable: false,
+    writable: false
+  });
+}
 
 invocations = new Map();
 
 hostProcess.on('message', async function(message) {
-  var args, context, controller, error, fn, index, j, len, pendingCall, ref, result;
+  var args, context, controller, error, fn, index, k, len1, pendingCall, ref1, result;
   if (false) {
     await void 0;
   }
@@ -730,8 +734,8 @@ hostProcess.on('message', async function(message) {
   }
   if (message.op === 'cancel') {
     invocationScope.run(message.id, function() {
-      var ref;
-      return (ref = invocations.get(message.id)) != null ? ref.abort() : void 0;
+      var ref1;
+      return (ref1 = invocations.get(message.id)) != null ? ref1.abort() : void 0;
     });
     return;
   }
@@ -763,9 +767,9 @@ hostProcess.on('message', async function(message) {
       }
       try {
         args = message.args || [];
-        ref = message.omitted || [];
-        for (j = 0, len = ref.length; j < len; j++) {
-          index = ref[j];
+        ref1 = message.omitted || [];
+        for (k = 0, len1 = ref1.length; k < len1; k++) {
+          index = ref1[k];
           args[index] = void 0;
         }
         result = (await invocationScope.run(message.id, function() {

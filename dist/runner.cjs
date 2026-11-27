@@ -33,6 +33,7 @@ IsolatedRunner = class IsolatedRunner {
   constructor(options) {
     this.child = null;
     this.pending = new Map();
+    this.timedOutChildren = new WeakSet();
     this.stopping = false;
     this.manifest = null;
     this.options = options;
@@ -40,26 +41,7 @@ IsolatedRunner = class IsolatedRunner {
   }
 
   async start() {
-    var __assign, _this, child, childPath, compilerDir, env, error, manifest, nodeMajor;
-    __assign = function() {
-      __assign = Object.assign || function(t) {
-        var i, n, p, s;
-        s = void 0;
-        i = 1;
-        n = arguments.length;
-        while (i < n) {
-          s = arguments[i];
-          for (p in s) {
-            if (Object.prototype.hasOwnProperty.call(s, p)) {
-              t[p] = s[p];
-            }
-          }
-          i++;
-        }
-        return t;
-      };
-      return __assign.apply(this, arguments);
-    };
+    var _this, child, childPath, compilerDir, env, error, manifest, nodeMajor, ref, ref1;
     _this = this;
     if (false) {
       await void 0;
@@ -73,11 +55,12 @@ IsolatedRunner = class IsolatedRunner {
     }
     this.stopping = false;
     childPath = node_path_1.default.join(__dirname, 'child.js');
-    env = __assign(__assign({}, this.options.env), {
+    env = {
+      NODE_ENV: (ref = (ref1 = this.options.env) != null ? ref1.NODE_ENV : void 0) != null ? ref : 'production',
       LOGOS_TYPE_LOADER: node_path_1.default.join(node_path_1.default.dirname(require.resolve('logos')), 'kernel/type-source.js'),
       LOGOS_ISOLATED_PACKAGE: this.options.dir,
       LOGOS_ISOLATED_FOLDER: this.options.folder
-    });
+    };
     compilerDir = node_path_1.default.dirname(require.resolve('logostype/package.json', {
       paths: [node_path_1.default.dirname(env.LOGOS_TYPE_LOADER)]
     }));
@@ -103,7 +86,7 @@ IsolatedRunner = class IsolatedRunner {
       var _a, _b, expected;
       _a = void 0;
       _b = void 0;
-      expected = _this.stopping || _this.child != child;
+      expected = !_this.timedOutChildren.has(child) && (_this.stopping || _this.child !== child);
       if (_this.child == child) {
         _this.onExit((signal ? 'child terminated ('.concat(signal, ')') : 'child exited'));
       }
@@ -134,9 +117,9 @@ IsolatedRunner = class IsolatedRunner {
     var arg, index, omitted;
     // JSON IPC would turn omitted positional arguments into null.
     omitted = (function() {
-      var j, len, results;
+      var i, len, results;
       results = [];
-      for (index = j = 0, len = args.length; j < len; index = ++j) {
+      for (index = i = 0, len = args.length; i < len; index = ++i) {
         arg = args[index];
         if (arg === void 0) {
           results.push(index);
@@ -246,7 +229,11 @@ IsolatedRunner = class IsolatedRunner {
         return abort(signal.reason);
       };
       timer = setTimeout((() => {
-        return abort(new Error('Isolated package "'.concat(this.options.folder, '" ').concat(op, ' timed out')));
+        var reason;
+        reason = op + ' timed out';
+        // Stop revokes every pending host scope before settling the calls.
+        this.timedOutChildren.add(child);
+        this.stop(reason);
       }), (ref = this.options.timeoutMs) != null ? ref : 30000);
       this.pending.set(id, {resolve, reject, cleanup, runInContext});
       if (signal != null) {

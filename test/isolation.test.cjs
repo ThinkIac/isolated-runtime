@@ -110,3 +110,45 @@ test('mediated IPC restores the host context for concurrent invocations', async 
   await a.rejects(runner.invoke(tool.id, [-1]), /serialize a BigInt/);
   a.equal(runner.running, true);
 });
+
+test('timeout revokes concurrent invocations and retires the child', { timeout: 8000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'isolation-timeout-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"demo"}');
+  fs.writeFileSync(path.join(dir, 'index.js'), `
+    exports.wait = async function () {
+      /** @register_tool wait */
+      await new Promise(() => {});
+    };
+    exports.check = function () {
+      /** @register_tool check */
+      return [typeof fetch, typeof WebSocket, typeof EventSource, process.env.NODE_ENV];
+    };
+  `);
+  let notifyExit;
+  const exited = new Promise(resolve => { notifyExit = resolve; });
+  const runner = new (require('../runner.cjs').IsolatedRunner)({
+    folder: 'demo', dir, timeoutMs: 1500,
+    env: { NODE_ENV: 'test', NODE_OPTIONS: '--invalid-test-option' },
+    onExit: notifyExit,
+  });
+  t.after(() => runner.stop());
+  const find = (manifest, name) => manifest.tools.find(tool => tool.name === name).id;
+  const manifest = await runner.start();
+  const pid = runner.pid;
+  a.deepEqual(await runner.invoke(find(manifest, 'check'), []),
+    ['undefined', 'undefined', 'undefined', 'test']);
+  const handler = find(manifest, 'wait');
+  await Promise.all([
+    a.rejects(runner.invoke(handler, []), /invoke timed out/),
+    a.rejects(runner.invoke(handler, []), /invoke timed out/),
+  ]);
+  a.equal(runner.running, false);
+  const exit = await exited;
+  a.equal(exit.pid, pid);
+  a.equal(exit.expected, false);
+  const restarted = await runner.start();
+  a.notEqual(runner.pid, pid);
+  a.deepEqual(await runner.invoke(find(restarted, 'check'), []),
+    ['undefined', 'undefined', 'undefined', 'test']);
+});

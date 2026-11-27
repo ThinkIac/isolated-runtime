@@ -25,3 +25,20 @@ A base usa @thinkiac/module-isolated-runtime fixado por commit. As entradas anti
 ## Node 24
 
 Node 24 removeu o alias --experimental-permission. A implementação migrada usa --permission nessa versão e preserva o flag antigo em Node 22. Na matriz Node 24, quatro testes do original são ignorados por essa incompatibilidade do original; os quatro testes equivalentes da implementação .type continuam obrigatórios. Em Node 22, ambas as implementações são testadas.
+
+## Encerramento e limites do processo
+
+O processo filho recebe apenas `NODE_ENV` e os caminhos de bootstrap
+controlados pelo host. `fetch`, `WebSocket` e `EventSource` estão indisponíveis
+na superfície global do pacote. Acesso mediado depende dos provedores
+habilitados e das respectivas verificações de autoridade.
+
+Um timeout encerra a geração inteira. O runner revoga imediatamente os escopos
+IPC pendentes, solicita saída e usa encerramento forçado se o filho não sair.
+Uma partida posterior cria outro processo. O encerramento não desfaz efeitos
+de operações que o host já executou.
+
+O modo no mesmo processo continua reservado a código confiável. O modo isolado
+atual usa as permissões do Node e mediação por IPC. Rede, sistema de arquivos,
+identidade do usuário do sistema e consumo de recursos precisam de uma fronteira
+adicional no sistema operacional antes de executar código deliberadamente hostil.
