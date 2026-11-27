@@ -305,7 +305,16 @@ IsolatedRunner = class IsolatedRunner {
         response.error = (ref1 = error != null ? error.message : void 0) != null ? ref1 : String(error);
       }
       if (this.child === child && (child != null ? child.connected : void 0)) {
-        child.send(response, function() {});
+        try {
+          child.send(response, function() {});
+        } catch (error1) {
+          error = error1;
+          child.send({
+            op: message.op + ':error',
+            id: message.id,
+            error: error.message
+          }, function() {});
+        }
       }
       return;
     }

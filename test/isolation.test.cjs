@@ -91,12 +91,13 @@ test('mediated IPC restores the host context for concurrent invocations', async 
       /** @register_tool read */
       await new Promise(resolve => setTimeout(resolve, pause));
       const supplied = { principal: 'forged', invocation: 'forged' };
+      if (pause < 0) return emit('unserializable', supplied);
       return [await emit('read', supplied), await requestCapability(supplied)];
     };
   `);
   const runner = new (require('../runner.cjs').IsolatedRunner)({
     folder: 'demo', dir, timeoutMs: 3000,
-    onEvent: () => context.getStore(),
+    onEvent: event => event === 'unserializable' ? BigInt(1) : context.getStore(),
     onCapability: () => context.getStore(),
   });
   t.after(() => runner.stop());
@@ -106,4 +107,6 @@ test('mediated IPC restores the host context for concurrent invocations', async 
     context.run('second', () => runner.invoke(tool.id, [0])),
   ]);
   a.deepEqual(values, [['first', 'first'], ['second', 'second']]);
+  await a.rejects(runner.invoke(tool.id, [-1]), /serialize a BigInt/);
+  a.equal(runner.running, true);
 });

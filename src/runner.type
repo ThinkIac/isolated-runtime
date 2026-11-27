@@ -198,7 +198,10 @@ class IsolatedRunner
         response.op = message.op + ':error'
         response.error = error?.message ? String(error)
       if @child is child and child?.connected
-        child.send response, -> return
+        try
+          child.send response, -> return
+        catch error
+          child.send {op: message.op + ':error', id: message.id, error: error.message}, -> return
       return
     if `message.op == 'log'`
       (if `(_m = (_l = this.options).onLog) == null` or `_m == void 0` then undefined else _m.call(_l, String(message.message)))
