@@ -177,6 +177,10 @@ test('Linux sandbox preserves IPC and applies process and capability restriction
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"demo"}');
   fs.writeFileSync(path.join(pkg, 'index.js'), `
     const { requestCapability } = require('logos');
+    exports.wait = async function () {
+      /** @register_tool wait */
+      return requestCapability({ surface: 'wait' });
+    };
     exports.check = async function () {
       /** @register_tool check */
       const denied = [];
@@ -196,18 +200,25 @@ test('Linux sandbox preserves IPC and applies process and capability restriction
     sandboxRoot,
     sandboxLauncher: process.env.LOGOS_TEST_BWRAP,
     env: { TEST_CREDENTIAL: 'host-only fixture' },
+    timeoutMs: 1500,
     onCapability: ({ surface, value }) => {
+      if (surface === 'wait') return new Promise(() => {});
       a.equal(surface, 'echo');
       return value * 2;
     },
   });
   t.after(() => runner.stop());
   const manifest = await runner.start();
-  a.deepEqual(await runner.invoke(manifest.tools[0].id, []), {
+  const id = name => manifest.tools.find(tool => tool.name === name).id;
+  a.deepEqual(await runner.invoke(id('check'), []), {
     env: ['NODE_ENV'],
     denied: ['node:fs', 'node:net', 'node:child_process'],
     value: 42,
   });
+  await a.rejects(runner.invoke(id('wait'), []), /timed out/i);
+  a.equal(runner.running, false);
+  const restarted = await runner.start();
+  a.equal((await runner.invoke(restarted.tools.find(tool => tool.name === 'check').id, [])).value, 42);
   await runner.stop();
   a.equal(runner.running, false);
 });
