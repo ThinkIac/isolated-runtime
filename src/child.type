@@ -4,17 +4,15 @@ validateTypePath = (real) ->
   return
 
 request = (op, payload) ->
+  invocation = invocationScope.getStore()
+  unless invocation?
+    return Promise.reject new Error('Isolated request has no active host invocation')
   id = String(++sequence)
-  new Promise((resolve, reject) ->
-    pending.set id,
-      resolve: resolve
-      reject: reject
-    hostProcess.send __assign({
-      op: op
-      id: id
-    }, payload)
-    return
-)
+  new Promise (resolve, reject) ->
+    pending.set id, {resolve, reject}
+    hostProcess.send Object.assign({op, id, invocation}, payload), (error) ->
+      if error and pending.delete(id)
+        reject error
 
 requestEvent = (event, payload) ->
   request 'event',
@@ -472,6 +470,8 @@ path = require('node:path')
 Module = require('node:module')
 pkgDir = path.resolve(process.env.LOGOS_ISOLATED_PACKAGE)
 hostProcess = process
+{ AsyncLocalStorage } = require('node:async_hooks')
+invocationScope = new AsyncLocalStorage()
 # Keep compiler authority inside bootstrap; package code cannot import it.
 typeLoader = (if files(pkgDir).some(((file) ->
   file.endsWith '.type'
@@ -532,7 +532,7 @@ hostProcess.on 'message', (message) ->
     (if message.op.endsWith(':error') then pendingCall.reject(new Error(message.error)) else pendingCall.resolve(message.result))
     return
   if message.op is 'cancel'
-    invocations.get(message.id)?.abort()
+    invocationScope.run message.id, -> invocations.get(message.id)?.abort()
     return
   if `message.op == 'stop'`
     hostProcess.disconnect()
@@ -543,7 +543,7 @@ hostProcess.on 'message', (message) ->
       hostProcess.send
         op: 'result'
         id: message.id
-        result: await(discover())
+        result: await invocationScope.run(message.id, discover)
     else if `message.op == 'invoke'`
       fn = functions.get(message.handler)
       if !fn
@@ -557,7 +557,7 @@ hostProcess.on 'message', (message) ->
       try
         args = message.args or []
         args[index] = undefined for index in message.omitted or []
-        result = await fn(...args, context)
+        result = await invocationScope.run message.id, -> fn(...args, context)
         unless controller?.signal.aborted
           hostProcess.send {op: 'result', id: message.id, result}
       catch error

@@ -1,4 +1,4 @@
-var Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, invocations, logosFacade, originalLoad, params, path, pending, pkgDir, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
+var AsyncLocalStorage, Module, __assign, __read, __spreadArray, __values, _a, databaseProxy, descriptor, discover, docOf, files, fs, functions, hostProcess, invocationScope, invocations, logosFacade, originalLoad, params, path, pending, pkgDir, request, requestEvent, sequence, tag, typeLoader, validateTypePath;
 
 validateTypePath = function(real) {
   if (!real.startsWith(''.concat(pkgDir).concat(path.sep))) {
@@ -7,17 +7,19 @@ validateTypePath = function(real) {
 };
 
 request = function(op, payload) {
-  var id;
+  var id, invocation;
+  invocation = invocationScope.getStore();
+  if (invocation == null) {
+    return Promise.reject(new Error('Isolated request has no active host invocation'));
+  }
   id = String(++sequence);
   return new Promise(function(resolve, reject) {
-    pending.set(id, {
-      resolve: resolve,
-      reject: reject
+    pending.set(id, {resolve, reject});
+    return hostProcess.send(Object.assign({op, id, invocation}, payload), function(error) {
+      if (error && pending.delete(id)) {
+        return reject(error);
+      }
     });
-    hostProcess.send(__assign({
-      op: op,
-      id: id
-    }, payload));
   });
 };
 
@@ -629,6 +631,10 @@ pkgDir = path.resolve(process.env.LOGOS_ISOLATED_PACKAGE);
 
 hostProcess = process;
 
+({AsyncLocalStorage} = require('node:async_hooks'));
+
+invocationScope = new AsyncLocalStorage();
+
 // Keep compiler authority inside bootstrap; package code cannot import it.
 typeLoader = (files(pkgDir).some((function(file) {
   return file.endsWith('.type');
@@ -706,7 +712,7 @@ Object.defineProperty(globalThis, 'fetch', {
 invocations = new Map();
 
 hostProcess.on('message', async function(message) {
-  var args, context, controller, error, fn, index, j, len, pendingCall, ref, ref1, result;
+  var args, context, controller, error, fn, index, j, len, pendingCall, ref, result;
   if (false) {
     await void 0;
   }
@@ -723,9 +729,10 @@ hostProcess.on('message', async function(message) {
     return;
   }
   if (message.op === 'cancel') {
-    if ((ref = invocations.get(message.id)) != null) {
-      ref.abort();
-    }
+    invocationScope.run(message.id, function() {
+      var ref;
+      return (ref = invocations.get(message.id)) != null ? ref.abort() : void 0;
+    });
     return;
   }
   if (message.op == 'stop') {
@@ -738,7 +745,7 @@ hostProcess.on('message', async function(message) {
       hostProcess.send({
         op: 'result',
         id: message.id,
-        result: (await (discover()))
+        result: (await invocationScope.run(message.id, discover))
       });
     } else if (message.op == 'invoke') {
       fn = functions.get(message.handler);
@@ -756,12 +763,14 @@ hostProcess.on('message', async function(message) {
       }
       try {
         args = message.args || [];
-        ref1 = message.omitted || [];
-        for (j = 0, len = ref1.length; j < len; j++) {
-          index = ref1[j];
+        ref = message.omitted || [];
+        for (j = 0, len = ref.length; j < len; j++) {
+          index = ref[j];
           args[index] = void 0;
         }
-        result = (await fn(...args, context));
+        result = (await invocationScope.run(message.id, function() {
+          return fn(...args, context);
+        }));
         if (!(controller != null ? controller.signal.aborted : void 0)) {
           hostProcess.send({
             op: 'result',

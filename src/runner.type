@@ -7,13 +7,14 @@ __importDefault = this and @__importDefault or (mod) ->
   (if mod and mod.__esModule then mod else 'default': mod)
 Object.defineProperty exports, '__esModule', value: true
 exports.IsolatedRunner = undefined
+{ AsyncLocalStorage } = require('node:async_hooks')
+{ randomUUID } = require('node:crypto')
 node_child_process_1 = require('node:child_process')
 node_path_1 = __importDefault(require('node:path'))
 class IsolatedRunner
   constructor: (options) ->
     @child = null
     @pending = new Map
-    @sequence = 0
     @stopping = false
     @manifest = null
     @options = options
@@ -148,7 +149,8 @@ class IsolatedRunner
       return Promise.reject(new Error('Isolated package "'.concat(@options.folder, '" is not connected')))
     if signal?.aborted
       return Promise.reject(signal.reason)
-    id = String(++@sequence)
+    id = randomUUID()
+    runInContext = AsyncLocalStorage.snapshot()
     new Promise (resolve, reject) =>
       cleanup = =>
         clearTimeout timer
@@ -162,7 +164,7 @@ class IsolatedRunner
         reject error
       cancel = -> abort signal.reason
       timer = setTimeout (=> abort new Error('Isolated package "'.concat(@options.folder, '" ').concat(op, ' timed out'))), @options.timeoutMs ? 30000
-      @pending.set id, {resolve, reject, cleanup}
+      @pending.set id, {resolve, reject, cleanup, runInContext}
       signal?.addEventListener 'abort', cancel, {once: true}
       try
         child.send Object.assign({op, id}, payload), (error) =>
@@ -173,53 +175,39 @@ class IsolatedRunner
         cleanup()
         reject error
   onMessage: (message) ->
-    `var result`
-    _a = undefined
-    _b = undefined
-    _c = undefined
-    _d = undefined
-    _e = undefined
-    _f = undefined
-    _g = undefined
-    _h = undefined
-    _j = undefined
-    _k = undefined
     _l = undefined
     _m = undefined
     _o = undefined
     await undefined if false
     if !message or `typeof message != 'object'`
       return
-    if `message.op == 'event'`
+    if message.op in ['event', 'capability']
+      child = @child
+      scope = @pending.get(message.invocation)
+      response = { id: message.id }
       try
-        result = await((if `(_b = (_a = this.options).onEvent) == null` or `_b == void 0` then undefined else _b.call(_a, message.event, message.payload)))
-        (if `(_c = this.child) == null` or `_c == void 0` then undefined else _c.send(
-          op: 'event:result'
-          id: message.id
-          result: result))
+        unless scope
+          throw new Error('Isolated request has no active host invocation')
+        response.result = await scope.runInContext =>
+          if message.op is 'event'
+            @options.onEvent?(message.event, message.payload)
+          else
+            @options.onCapability?(message.request)
+        response.op = message.op + ':result'
       catch error
-        (if `(_d = this.child) == null` or `_d == void 0` then `undefined` else _d.send(
-          op: 'event:error'
-          id: message.id
-          error: (if `(_e = error === null || error === void 0 ? void 0 : error.message) != null` and `_e != void 0` then _e else String(error))))
-      return
-    if `message.op == 'capability'`
-      try
-        result = await((if `(_g = (_f = this.options).onCapability) == null` or `_g == void 0` then undefined else _g.call(_f, message.request)))
-        (if `(_h = this.child) == null` or `_h == void 0` then undefined else _h.send(
-          op: 'capability:result'
-          id: message.id
-          result: result))
-      catch error
-        (if `(_j = this.child) == null` or `_j == void 0` then `undefined` else _j.send(
-          op: 'capability:error'
-          id: message.id
-          error: (if `(_k = error === null || error === void 0 ? void 0 : error.message) != null` and `_k != void 0` then _k else String(error))))
+        response.op = message.op + ':error'
+        response.error = error?.message ? String(error)
+      if @child is child and child?.connected
+        try
+          child.send response, -> return
+        catch error
+          child.send {op: message.op + ':error', id: message.id, error: error.message}, -> return
       return
     if `message.op == 'log'`
       (if `(_m = (_l = this.options).onLog) == null` or `_m == void 0` then undefined else _m.call(_l, String(message.message)))
       return
-    pending = @pending.get(String(message.id))
+    return unless message.op in ['result', 'error']
+    pending = @pending.get(message.id)
     if !pending
       return
     pending.cleanup()
