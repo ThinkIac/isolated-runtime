@@ -290,6 +290,18 @@ discover = async function() {
       exports = (compiled ? typeLoader.loadType(file, compiled.js, validateTypePath, (function(_root, entity) {
         return new Proxy({}, {
           get: (function(_target, key) {
+            if (key === '__logosReadPrimaryKey') {
+              return function(value) {
+                return request('capability', {
+                  request: {
+                    surface: 'scriba:primary-key',
+                    operation: 'read',
+                    model: entity,
+                    key: value
+                  }
+                });
+              };
+            }
             if (typeof key != 'string' || key == 'then') {
               return undefined;
             }
