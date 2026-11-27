@@ -30,13 +30,23 @@ test('request context and cancellation reach an isolated invocation', { timeout:
       /** @register_tool observe */
       return [value, ctx.event, ctx.flowId, Object.isFrozen(ctx), ctx.signal.aborted];
     };
+    let cancelled;
+    exports.status = async function () {
+      /** @register_tool status */
+      return cancelled;
+    };
     exports.wait = async function (ctx) {
       /** @register_tool wait */
       await new Promise(resolve => {
         ctx.signal.addEventListener('abort', resolve, { once: true });
         requestCapability({ surface: 'ready' });
       });
-      await requestCapability({ surface: 'cancelled' });
+      try {
+        await requestCapability({ surface: 'cancelled' });
+        cancelled = 'unexpected success';
+      } catch (error) {
+        cancelled = error.message;
+      }
     };
   `);
   const signals = new Map();
@@ -54,13 +64,46 @@ test('request context and cancellation reach an isolated invocation', { timeout:
     ['default', context.event, context.flowId, true, false]);
 
   const ready = listen('ready');
-  const cancelled = listen('cancelled');
   const controller = new AbortController();
   const invocation = runner.invokeWithContext(id('wait'), [], context, controller.signal);
   await ready;
   const reason = new Error('request cancelled');
   controller.abort(reason);
   await a.rejects(invocation, error => error === reason);
-  await cancelled;
+  let status;
+  for (let attempt = 0; attempt < 30 && !status; attempt++) {
+    status = await runner.invoke(id('status'), []);
+    if (!status) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  a.match(status, /no active host invocation/);
   a.equal(runner.running, true);
+});
+
+test('mediated IPC restores the host context for concurrent invocations', async t => {
+  const { AsyncLocalStorage } = require('node:async_hooks');
+  const context = new AsyncLocalStorage();
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'isolation-authority-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"demo"}');
+  fs.writeFileSync(path.join(dir, 'index.js'), `
+    const { emit, requestCapability } = require('logos');
+    exports.read = async function (pause) {
+      /** @register_tool read */
+      await new Promise(resolve => setTimeout(resolve, pause));
+      const supplied = { principal: 'forged', invocation: 'forged' };
+      return [await emit('read', supplied), await requestCapability(supplied)];
+    };
+  `);
+  const runner = new (require('../runner.cjs').IsolatedRunner)({
+    folder: 'demo', dir, timeoutMs: 3000,
+    onEvent: () => context.getStore(),
+    onCapability: () => context.getStore(),
+  });
+  t.after(() => runner.stop());
+  const { tools: [tool] } = await runner.start();
+  const values = await Promise.all([
+    context.run('first', () => runner.invoke(tool.id, [30])),
+    context.run('second', () => runner.invoke(tool.id, [0])),
+  ]);
+  a.deepEqual(values, [['first', 'first'], ['second', 'second']]);
 });

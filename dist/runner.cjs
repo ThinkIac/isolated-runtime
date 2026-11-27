@@ -1,5 +1,5 @@
 'use strict';
-var IsolatedRunner, __importDefault, node_child_process_1, node_path_1;
+var AsyncLocalStorage, IsolatedRunner, __importDefault, node_child_process_1, node_path_1, randomUUID;
 
 // core/isolated — process boundary for packages declared `isolated: true`.
 
@@ -21,6 +21,10 @@ Object.defineProperty(exports, '__esModule', {
 
 exports.IsolatedRunner = void 0;
 
+({AsyncLocalStorage} = require('node:async_hooks'));
+
+({randomUUID} = require('node:crypto'));
+
 node_child_process_1 = require('node:child_process');
 
 node_path_1 = __importDefault(require('node:path'));
@@ -29,7 +33,6 @@ IsolatedRunner = class IsolatedRunner {
   constructor(options) {
     this.child = null;
     this.pending = new Map();
-    this.sequence = 0;
     this.stopping = false;
     this.manifest = null;
     this.options = options;
@@ -206,7 +209,7 @@ IsolatedRunner = class IsolatedRunner {
   }
 
   request(op, payload, signal) {
-    var child, id;
+    var child, id, runInContext;
     child = this.child;
     if (!(child != null ? child.connected : void 0)) {
       return Promise.reject(new Error('Isolated package "'.concat(this.options.folder, '" is not connected')));
@@ -214,7 +217,8 @@ IsolatedRunner = class IsolatedRunner {
     if (signal != null ? signal.aborted : void 0) {
       return Promise.reject(signal.reason);
     }
-    id = String(++this.sequence);
+    id = randomUUID();
+    runInContext = AsyncLocalStorage.snapshot();
     return new Promise((resolve, reject) => {
       var abort, cancel, cleanup, error, ref, timer;
       cleanup = () => {
@@ -244,7 +248,7 @@ IsolatedRunner = class IsolatedRunner {
       timer = setTimeout((() => {
         return abort(new Error('Isolated package "'.concat(this.options.folder, '" ').concat(op, ' timed out')));
       }), (ref = this.options.timeoutMs) != null ? ref : 30000);
-      this.pending.set(id, {resolve, reject, cleanup});
+      this.pending.set(id, {resolve, reject, cleanup, runInContext});
       if (signal != null) {
         signal.addEventListener('abort', cancel, {
           once: true
@@ -266,18 +270,7 @@ IsolatedRunner = class IsolatedRunner {
   }
 
   async onMessage(message) {
-    var result;
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, error, pending, result;
-    _a = void 0;
-    _b = void 0;
-    _c = void 0;
-    _d = void 0;
-    _e = void 0;
-    _f = void 0;
-    _g = void 0;
-    _h = void 0;
-    _j = void 0;
-    _k = void 0;
+    var _l, _m, _o, child, error, pending, ref, ref1, ref2, response, scope;
     _l = void 0;
     _m = void 0;
     _o = void 0;
@@ -287,39 +280,32 @@ IsolatedRunner = class IsolatedRunner {
     if (!message || typeof message != 'object') {
       return;
     }
-    if (message.op == 'event') {
+    if ((ref = message.op) === 'event' || ref === 'capability') {
+      child = this.child;
+      scope = this.pending.get(message.invocation);
+      response = {
+        id: message.id
+      };
       try {
-        result = (await ((_b = (_a = this.options).onEvent) == null || _b == void 0 ? void 0 : _b.call(_a, message.event, message.payload)));
-        ((_c = this.child) == null || _c == void 0 ? void 0 : _c.send({
-          op: 'event:result',
-          id: message.id,
-          result: result
+        if (!scope) {
+          throw new Error('Isolated request has no active host invocation');
+        }
+        response.result = (await scope.runInContext(() => {
+          var base, base1;
+          if (message.op === 'event') {
+            return typeof (base = this.options).onEvent === "function" ? base.onEvent(message.event, message.payload) : void 0;
+          } else {
+            return typeof (base1 = this.options).onCapability === "function" ? base1.onCapability(message.request) : void 0;
+          }
         }));
+        response.op = message.op + ':result';
       } catch (error1) {
         error = error1;
-        ((_d = this.child) == null || _d == void 0 ? undefined : _d.send({
-          op: 'event:error',
-          id: message.id,
-          error: ((_e = error === null || error === void 0 ? void 0 : error.message) != null && _e != void 0 ? _e : String(error))
-        }));
+        response.op = message.op + ':error';
+        response.error = (ref1 = error != null ? error.message : void 0) != null ? ref1 : String(error);
       }
-      return;
-    }
-    if (message.op == 'capability') {
-      try {
-        result = (await ((_g = (_f = this.options).onCapability) == null || _g == void 0 ? void 0 : _g.call(_f, message.request)));
-        ((_h = this.child) == null || _h == void 0 ? void 0 : _h.send({
-          op: 'capability:result',
-          id: message.id,
-          result: result
-        }));
-      } catch (error1) {
-        error = error1;
-        ((_j = this.child) == null || _j == void 0 ? undefined : _j.send({
-          op: 'capability:error',
-          id: message.id,
-          error: ((_k = error === null || error === void 0 ? void 0 : error.message) != null && _k != void 0 ? _k : String(error))
-        }));
+      if (this.child === child && (child != null ? child.connected : void 0)) {
+        child.send(response, function() {});
       }
       return;
     }
@@ -327,7 +313,10 @@ IsolatedRunner = class IsolatedRunner {
       ((_m = (_l = this.options).onLog) == null || _m == void 0 ? void 0 : _m.call(_l, String(message.message)));
       return;
     }
-    pending = this.pending.get(String(message.id));
+    if ((ref2 = message.op) !== 'result' && ref2 !== 'error') {
+      return;
+    }
+    pending = this.pending.get(message.id);
     if (!pending) {
       return;
     }
